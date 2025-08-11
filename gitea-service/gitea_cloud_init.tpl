@@ -419,6 +419,11 @@ write_files:
       Environment=HOME=$(get_gitea_mount_point)/git
       Environment=GITEA_WORK_DIR=$(get_gitea_mount_point)/gitea
       Environment=DISABLE_REGISTRATION=true
+      Environment=ENABLE_OPENID_SIGNIN=false
+      Environment=ENABLE_OPENID_SIGNUP=false
+      Environment=REQUIRE_SIGNIN_VIEW=true
+      Environment=ENABLE_TIMETRACKING=false
+      Environment=DEFAULT_ENABLE_TIMETRACKING=false
       # If you want to bind Gitea to a port below 1024, uncomment
       # the two values below, or use socket activation to pass Gitea its ports as above
       ###
@@ -471,7 +476,8 @@ write_files:
       REQUIRE_SIGNIN_VIEW = true
       DEFAULT_KEEP_EMAIL_PRIVATE = false
       DEFAULT_ALLOW_CREATE_ORGANIZATION = true
-      DEFAULT_ENABLE_TIMETRACKING = true
+      ENABLE_TIMETRACKING = false
+      DEFAULT_ENABLE_TIMETRACKING = false
       NO_REPLY_ADDRESS = noreply.localhost
       
       [openid]
@@ -528,6 +534,19 @@ write_files:
       main
       
 runcmd:
+  - ufw enable
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw default deny routed
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
   - chown root:caddy /etc/caddy/Caddyfile
   - /bin/bash /usr/local/bin/setup_gitea.sh
-  - systemctl start caddy
+
+power_state:
+  delay: "now"
+  mode: reboot
+  message: Cloud init finished, rebooting ...
+  timeout: 30
+  condition: True
