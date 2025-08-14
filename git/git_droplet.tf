@@ -1,17 +1,15 @@
-resource "digitalocean_droplet" "gitea_droplet" {
+resource "digitalocean_droplet" "git_droplet" {
   image = var.do_image
-  name = "gitea"
+  name = var.do_droplet_name
   region = var.do_region
   size = var.do_droplet_size
   ssh_keys = [
     data.digitalocean_ssh_key.do_master_ssh_key.id
   ]
-  user_data = templatefile("gitea_cloud_init.tpl", {
+  user_data = templatefile("git_cloud_init.tpl", {
     admin_user = var.do_admin_user
-    domain_name = var.do_domain
-    droplet_name = var.do_droplet_name
-    volume_name = var.do_volume_name
     pub_ssh_key = data.local_file.pub_ssh_key_file.content
+    droplet_name = var.do_droplet_name
   })
 }
 
@@ -19,10 +17,6 @@ data "digitalocean_ssh_key" "do_master_ssh_key" {
   name = var.do_master_ssh_pub_key_name
 }
 
-data "local_file" "pub_ssh_key_file" {
-  filename = var.do_ssh_pub_key_file
-}
-
 output "VM_IP_ADDR" {
-  value = digitalocean_droplet.gitea_droplet.ipv4_address
+  value = digitalocean_droplet.git_droplet.ipv4_address
 }

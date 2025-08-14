@@ -2,6 +2,18 @@
 package_update: true
 package_upgrade: true
 
+users:
+  - name: ${admin_user}
+    ssh-authorized-keys:
+      - ${pub_ssh_key}
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    groups: sudo
+    lock_passwd: true
+    shell: /bin/bash
+
+groups:
+  - nologin-ssh-users
+
 apt:
   preserve_sources_list: true
   sources:
@@ -78,24 +90,78 @@ packages:
 
 write_files:
   - path: /etc/caddy/Caddyfile
-    permissions: '0640'
+    permissions: '0600'
     owner: 'root:root'
     content: |
-      gitea.${domain_name} {
+      ${droplet_name}.${domain_name} {
         reverse_proxy localhost:3000
       }
+
+  - path: /etc/systemd/system/gitea.service
+    permissions: '0755'
+    owner: 'root:root'
+    content: |
+      [Unit]
+      Description=Gitea (Git with a cup of tea)
+      After=network.target
+      
+      [Service]
+      # Uncomment the next line if you have repos with lots of files and get a HTTP 500 error because of that
+      # LimitNOFILE=524288:524288
+      RestartSec=2s
+      Type=simple
+      User=git
+      Group=git
+      WorkingDirectory=/mnt/${volume_name}/gitea/
+      # If using Unix socket: tells systemd to create the /run/gitea folder, which will contain the gitea.sock file
+      # (manually creating /run/gitea doesn't work, because it would not persist across reboots)
+      #RuntimeDirectory=gitea
+      Restart=always
+      Environment="HTTP_ADDR=127.0.0.1"
+      Environment="HTTP_PORT=3000"
+      Environment="DOMAIN=${droplet_name}.${domain_name}"
+      Environment="ROOT_URL=https://${droplet_name}.${domain_name}/"
+      Environment="USER=git"
+      Environment="HOME=/mnt/${volume_name}/git"
+      Environment="GITEA_WORK_DIR=/mnt/${volume_name}/gitea"
+      Environment="DISABLE_REGISTRATION=true"
+      Environment="ENABLE_OPENID_SIGNIN=false"
+      Environment="ENABLE_OPENID_SIGNUP=false"
+      Environment="REQUIRE_SIGNIN_VIEW=true"
+      Environment="ENABLE_TIMETRACKING=false"
+      Environment="DEFAULT_ENABLE_TIMETRACKING=false"
+      ExecStart=/usr/local/bin/gitea web 
+      # If you want to bind Gitea to a port below 1024, uncomment
+      # the two values below, or use socket activation to pass Gitea its ports as above
+      ###
+      #CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+      #AmbientCapabilities=CAP_NET_BIND_SERVICE
+      ###
+      # In some cases, when using CapabilityBoundingSet and AmbientCapabilities option, you may want to
+      # set the following value to false to allow capabilities to be applied on gitea process. The following
+      # value if set to true sandboxes gitea service and prevent any processes from running with privileges
+      # in the host user namespace.
+      ###
+      #PrivateUsers=false
+      ###
+      
+      [Install]
+      WantedBy=multi-user.target
   - path: /usr/local/bin/setup_gitea.sh
-    permissions: '0700'
+    permissions: '0755'
     owner: 'root:root'
     content: |
       #!/bin/bash
-      
+      if [[ $EUID -ne 0 ]]; then
+         echo "This script must be run as root" 
+         exit 1
+      fi
       get_gitea_domain() {
           echo "${domain_name}"
       }
       
       get_gitea_volume_name() {
-          echo "giteavolume"
+          echo "${volume_name}"
       }
       
       get_gitea_base_url() {
@@ -177,15 +243,14 @@ write_files:
           version=$(curl -s "$base_url/version.json" | jq -r '.latest.version')
           if [[ ! "$version" =~ ^1\.[0-9]+\.[0-9]+$ ]]; then
               logger -t setup_gitea "Invalid version format for latest gitea version: '$version'"
-              exit 1
+              exit 3
           fi
           echo "$version"
       }
       
       install_latest_gitea() {
-          local base_url version bin_name bin_url sig_url tmpdir gpg_key_id gpg_key_server
+          local version bin_name bin_url sig_url tmpdir gpg_key_id gpg_key_server
       
-          base_url=$(get_gitea_base_url)
           version=$(get_gittea_latest_version)
           bin_name="gitea-$version-linux-amd64"
           bin_url="https://dl.gitea.com/gitea/$version/$bin_name"
@@ -194,12 +259,12 @@ write_files:
           gpg_key_server="keys.openpgp.org"
       
           tmpdir=$(mktemp -d)
-          cd "$tmpdir" || return 1
+          cd "$tmpdir" || exit 4
       
           # Download binary and signature
           logger -t setup_gitea "Download latest gitea version from $bin_url"
-          wget -q -O gitea "$bin_url" || { logger -t install_gitea "Failed to download binary"; return 1; }
-          wget -q -O gitea.asc "$sig_url" || { logger -t install_gitea "Failed to download signature"; return 1; }
+          wget -q -O gitea "$bin_url" || { logger -t install_gitea "Failed to download binary"; exit 5; }
+          wget -q -O gitea.asc "$sig_url" || { logger -t install_gitea "Failed to download signature"; exit 6; }
       
           chmod +x gitea
       
@@ -208,13 +273,13 @@ write_files:
               logger -t setup_gitea "Gitea GPG signature verified successfully"
           else
               logger -t setup_gitea "Gitea GPG signature verification failed"
-              return 1
+              exit 7
           fi
       
           # Move binary to /usr/local/bin
           mv gitea /usr/local/bin/gitea || {
               logger -t setup_gitea "Failed to move Gitea to /usr/local/bin"
-              return 1
+              exit 8
           }
       
           logger -t setup_gitea "Gitea $version installed successfully at /usr/local/bin/gitea"
@@ -225,7 +290,6 @@ write_files:
       import_gitea_public_key() {
          gpg --import >/dev/null 2>&1 <<EOF 
       -----BEGIN PGP PUBLIC KEY BLOCK-----
-      
       mQINBFsvDSkBEADtyFKGhQ/sh9KmVAzivJfMGbasytWkZNdIrwCoxSTEijl2QLyi
       E8b5xEOK2+9b3OXF+Nbm+tdfVCaKfoDhXdglxvENSdXA0mKxt4RhKxXAkWHrLfeA
       A4RbUj0ndfpJWpoRoEPZTP2a8UXOctUVQP+JzC+D028nawzpSVrXN7UYkszJ5j06
@@ -368,14 +432,14 @@ write_files:
           local home_dir="$(get_gitea_mount_point)/git"
       
           if [[ ! -d "$home_dir" ]]; then
-      	if ! id "$username" &>/dev/null; then
-      	    adduser --system --shell /bin/bash --gecos 'Git Version Control' --group --disabled-password --home $home_dir git
+      	      if ! id "$username" &>/dev/null; then
+      	          adduser --system --shell /bin/bash --gecos 'Git Version Control' --group --disabled-password --home $home_dir git
               fi
           else
-              chown -R git:git $home_dir
-      	if ! id "$username" &>/dev/null; then
-      	    adduser --system --shell /bin/bash --gecos 'Git Version Control' --group --disabled-password --no-create-home --home $home_dir git
+              if ! id "$username" &>/dev/null; then
+                  adduser --system --shell /bin/bash --gecos 'Git Version Control' --group --disabled-password --no-create-home --home $home_dir git
               fi
+              chown -R git:git $home_dir
           fi
       }
       
@@ -384,132 +448,11 @@ write_files:
           local work_dir="$(get_gitea_mount_point)/gitea"
       
           if [[ ! -d "$work_dir" ]]; then
-      	mkdir -p $work_dir/{custom,data,log}
-      	mkdir -p $work_dir/custom/conf
+      	      mkdir -p $work_dir/{custom,data,log}
+      	      mkdir -p $work_dir/custom/conf
               chown -R git:git $work_dir
           else
               chown -R git:git $work_dir
-          fi
-      }
-      
-      create_systemd_service() {
-          cat << EOF > /etc/systemd/system/gitea.service 
-      [Unit]
-      Description=Gitea (Git with a cup of tea)
-      After=network.target
-      
-      [Service]
-      # Uncomment the next line if you have repos with lots of files and get a HTTP 500 error because of that
-      # LimitNOFILE=524288:524288
-      RestartSec=2s
-      Type=simple
-      User=git
-      Group=git
-      WorkingDirectory=$(get_gitea_mount_point)/gitea/
-      # If using Unix socket: tells systemd to create the /run/gitea folder, which will contain the gitea.sock file
-      # (manually creating /run/gitea doesn't work, because it would not persist across reboots)
-      #RuntimeDirectory=gitea
-      ExecStart=/usr/local/bin/gitea web 
-      Restart=always
-      Environment=HTTP_ADDR=127.0.0.1
-      Environment=HTTP_PORT=3000
-      Environment=DOMAIN=gitea.$(get_gitea_domain)
-      Environment=ROOT_URL=https://gitea.$(get_gitea_domain)/
-      Environment=USER=git
-      Environment=HOME=$(get_gitea_mount_point)/git
-      Environment=GITEA_WORK_DIR=$(get_gitea_mount_point)/gitea
-      Environment=DISABLE_REGISTRATION=true
-      Environment=ENABLE_OPENID_SIGNIN=false
-      Environment=ENABLE_OPENID_SIGNUP=false
-      Environment=REQUIRE_SIGNIN_VIEW=true
-      Environment=ENABLE_TIMETRACKING=false
-      Environment=DEFAULT_ENABLE_TIMETRACKING=false
-      # If you want to bind Gitea to a port below 1024, uncomment
-      # the two values below, or use socket activation to pass Gitea its ports as above
-      ###
-      #CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-      #AmbientCapabilities=CAP_NET_BIND_SERVICE
-      ###
-      # In some cases, when using CapabilityBoundingSet and AmbientCapabilities option, you may want to
-      # set the following value to false to allow capabilities to be applied on gitea process. The following
-      # value if set to true sandboxes gitea service and prevent any processes from running with privileges
-      # in the host user namespace.
-      ###
-      #PrivateUsers=false
-      ###
-      
-      [Install]
-      WantedBy=multi-user.target
-      EOF
-      }
-      
-      create_gitea_config() {
-          local file="$(get_gitea_mount_point)/gitea/custom/conf/app.ini"
-      
-          if [[ ! -e $file ]]; then
-              cat << EOF > $file
-      APP_NAME = Gitea: Git with a cup of tea
-      RUN_MODE = prod
-      
-      [database]
-      DB_TYPE = sqlite3
-      
-      [server]
-      DOMAIN = gitea.$(get_gitea_domain)
-      HTTP_ADDR = 127.0.0.1
-      HTTP_PORT = 3000
-      ROOT_URL = https://gitea.$(get_gitea_domain)/
-      DISABLE_SSH = false
-      SSH_PORT = 22
-      LFS_START_SERVER = true
-      OFFLINE_MODE = true
-      
-      [mailer]
-      ENABLED = false
-      
-      [service]
-      REGISTER_EMAIL_CONFIRM = false
-      ENABLE_NOTIFY_MAIL = false
-      DISABLE_REGISTRATION = true
-      ALLOW_ONLY_EXTERNAL_REGISTRATION = false
-      ENABLE_CAPTCHA = false
-      REQUIRE_SIGNIN_VIEW = true
-      DEFAULT_KEEP_EMAIL_PRIVATE = false
-      DEFAULT_ALLOW_CREATE_ORGANIZATION = true
-      ENABLE_TIMETRACKING = false
-      DEFAULT_ENABLE_TIMETRACKING = false
-      NO_REPLY_ADDRESS = noreply.localhost
-      
-      [openid]
-      ENABLE_OPENID_SIGNIN = false
-      ENABLE_OPENID_SIGNUP = false
-      
-      [cron.update_checker]
-      ENABLED = false
-      
-      [session]
-      PROVIDER = file
-      
-      [log]
-      MODE = console
-      LEVEL = info
-      ROOT_PATH = $(get_gitea_mount_point)/gitea/log 
-      
-      [repository.pull-request]
-      DEFAULT_MERGE_STYLE = merge
-      
-      [repository.signing]
-      DEFAULT_TRUST_MODEL = committer
-      
-      [security]
-      INSTALL_LOCK = true
-      PASSWORD_HASH_ALGO = pbkdf2
-      
-      [oauth2]
-      EOF
-      
-              chown git:git $file
-              chmod 600 $file
           fi
       }
       
@@ -517,6 +460,8 @@ write_files:
           systemctl daemon-reload
           systemctl enable gitea
           systemctl start gitea
+          #ufw allow 80/tcp
+          #ufw allow 443/tcp
           logger -t setup_gitea "Gitea was setup successfully"
       }
       
@@ -526,27 +471,35 @@ write_files:
           install_latest_gitea
           ensure_git_user
           ensure_gitea_dirs
-          create_systemd_service
-          #create_gitea_config
           start_gitea
       }
       
       main
       
 runcmd:
+  - passwd -l root
   - ufw enable
   - ufw default deny incoming
   - ufw default allow outgoing
   - ufw default deny routed
+  - sed -i -E 's/#?PasswordAuthentication (yes|no)/PasswordAuthentication no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?PermitRootLogin (yes|no)/PermitRootLogin no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?X11Forwarding (yes|no)/X11Forwarding no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?PermitEmptyPasswords (yes|no)/PermitEmptyPasswords no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?IgnoreRhosts (yes|no)/IgnoreRhosts yes/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?HostbasedAuthentication (yes|no)/HostbasedAuthentication no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?PubkeyAuthentication (yes|no)/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+  - systemctl enable ssh
+  - systemctl restart sshd
   - ufw allow 22/tcp
-  - ufw allow 80/tcp
-  - ufw allow 443/tcp
-  - chown root:caddy /etc/caddy/Caddyfile
-  - /bin/bash /usr/local/bin/setup_gitea.sh
+  - systemctl stop caddy
+  - chmod 644 /etc/caddy/Caddyfile
 
 power_state:
   delay: "now"
   mode: reboot
-  message: Cloud init finished, rebooting ...
+  message: Cloud init, rebooting ...
   timeout: 30
   condition: True
+
+final_message: "Cloud-init finished!"
