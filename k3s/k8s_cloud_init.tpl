@@ -127,6 +127,8 @@ runcmd:
   - sed -i -E 's/#?PermitEmptyPasswords (yes|no)/PermitEmptyPasswords no/' /etc/ssh/sshd_config
   - sed -i -E 's/#?IgnoreRhosts (yes|no)/IgnoreRhosts yes/' /etc/ssh/sshd_config
   - sed -i -E 's/#?HostbasedAuthentication (yes|no)/HostbasedAuthentication no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?GSSAPIAuthentication (yes|no)/GSSAPIAuthentication no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?KerberosAuthentication (yes|no)/KerberosAuthentication no/' /etc/ssh/sshd_config
   - sed -i -E 's/#?PubkeyAuthentication (yes|no)/PubkeyAuthentication yes/' /etc/ssh/sshd_config
   - echo "Match Group nologin-ssh-users" >> /etc/ssh/sshd_config
   - echo "    ChrootDirectory %h" >> /etc/ssh/sshd_config

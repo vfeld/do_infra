@@ -10,6 +10,7 @@ users:
     groups: sudo
     lock_passwd: true
     shell: /bin/bash
+  - name: git
 
 apt:
   preserve_sources_list: true
@@ -84,7 +85,8 @@ apt:
 
 packages:
   - caddy
-  - lua5.4
+  - lua-luaossl
+  - lua-posix
   - apt: [cgit, apache2-]
   - fcgiwrap
 
@@ -94,19 +96,34 @@ write_files:
     owner: 'root:root'
     content: |
       ${droplet_name}.${domain_name} {
-        handle_path /cgit-css/* {
-          root * /usr/share/cgit/
-          file_server
-        }
-
-        handle {
-          reverse_proxy localhost:8999 {
-            transport fastcgi {
-              env DOCUMENT_ROOT /usr/lib/cgit/
-              env SCRIPT_FILENAME /usr/lib/cgit/cgit.cgi
+          @git path_regexp "^/git/.*/(HEAD|info/refs|objects/(info/[^/]+|[0-9a-f]{2}/[0-9a-f]{38}|pack/pack-[0-9a-f]{40}\.(pack|idx))|git-upload-pack)$"
+          handle @git {
+            uri strip_prefix /git
+            reverse_proxy localhost:8999 {
+              transport fastcgi {
+                env SCRIPT_FILENAME /usr/lib/git-core/git-http-backend
+                env GIT_HTTP_EXPORT_ALL 1
+                env GIT_PROJECT_ROOT /home/git/repos
+                env REQUEST_METHOD {method}
+                env QUERY_STRING {query}
+                env PATH_INFO {path}
+                env DOCUMENT_ROOT /var/lib/git/
+              }
             }
           }
-        }
+          handle_path /cgit-css/* {
+                  root * /usr/share/cgit/
+                  file_server
+          }
+      
+          handle {
+                  reverse_proxy localhost:8999 {
+                          transport fastcgi {
+                                  env DOCUMENT_ROOT /usr/lib/cgit/
+                                  env SCRIPT_FILENAME /usr/lib/cgit/cgit.cgi
+                          }
+                  }
+          }
       }
 
   - path: /etc/systemd/system/cgit.service
@@ -119,11 +136,21 @@ write_files:
       
       [Service]
       Type=exec
-      ExecStart=fcgiwrap -f -p "/usr/lib/cgit/cgit.cgi" -s tcp:127.0.0.1:8999
+      ExecStart=fcgiwrap -f -s tcp:127.0.0.1:8999
       
       [Install]
       WantedBy=multi-user.targetruncmd:
-      
+  - path: /etc/cgitrc
+    permissions: '0755'
+    owner: 'root:root'
+    content: |
+      css=/cgit-css/cgit.css
+      logo=/cgit-css/cgit.png
+      clone-url=https://$HTTP_HOST$SCRIPT_NAME/git/$CGIT_REPO_URL
+      #auth-filter=lua:/usr/lib/cgit/filters/file-authentication.lua
+      section-from-path=1
+      scan-path=/home/git/repos/
+
 runcmd:
   - passwd -l root
   - ufw enable
@@ -136,10 +163,16 @@ runcmd:
   - sed -i -E 's/#?PermitEmptyPasswords (yes|no)/PermitEmptyPasswords no/' /etc/ssh/sshd_config
   - sed -i -E 's/#?IgnoreRhosts (yes|no)/IgnoreRhosts yes/' /etc/ssh/sshd_config
   - sed -i -E 's/#?HostbasedAuthentication (yes|no)/HostbasedAuthentication no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?GSSAPIAuthentication (yes|no)/GSSAPIAuthentication no/' /etc/ssh/sshd_config
+  - sed -i -E 's/#?KerberosAuthentication (yes|no)/KerberosAuthentication no/' /etc/ssh/sshd_config
   - sed -i -E 's/#?PubkeyAuthentication (yes|no)/PubkeyAuthentication yes/' /etc/ssh/sshd_config
   - systemctl enable ssh
   - systemctl restart sshd
   - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+
+
 
 power_state:
   delay: "now"

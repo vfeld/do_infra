@@ -1,4 +1,4 @@
-resource "digitalocean_droplet" "git_droplet" {
+resource "digitalocean_droplet" "droplet" {
   image = var.do_image
   name = var.do_droplet_name
   region = var.do_region
@@ -6,11 +6,10 @@ resource "digitalocean_droplet" "git_droplet" {
   ssh_keys = [
     data.digitalocean_ssh_key.do_master_ssh_key.id
   ]
-  user_data = templatefile("git_cloud_init.tpl", {
+  user_data = templatefile("cloud_init.tpl", {
     admin_user = var.do_admin_user
-    pub_ssh_key = data.local_file.pub_ssh_key_file.content
-    droplet_name = var.do_droplet_name
     domain_name = var.do_domain
+    pub_ssh_key = data.local_file.pub_ssh_key_file.content
   })
 }
 
@@ -19,5 +18,5 @@ data "digitalocean_ssh_key" "do_master_ssh_key" {
 }
 
 output "VM_IP_ADDR" {
-  value = digitalocean_droplet.git_droplet.ipv4_address
+  value = digitalocean_droplet.droplet.ipv4_address
 }
